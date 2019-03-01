@@ -65,14 +65,14 @@ if __name__ == "__main__":
     if not couchDB.couchPing():
         exit(1)
 
-    batchSize = 10000 if not arguments['--size'] else  arguments['--size']
+    batchSize = 10000 if not arguments['--size'] else int(arguments['--size'])
     #res = {}
     
     if arguments['--data']:
         rootDir = arguments['--data']
         fileNames = sorted([  (f, os.path.getsize(rootDir+'/'+f) ) for f in os.listdir(rootDir) ], key=lambda x:x[1])
-        iMin = arguments['--min'] if arguments['--min'] else 0
-        iMax = arguments['--max'] if arguments['--max'] else len(fileNames)
+        iMin = int(arguments['--min']) if arguments['--min'] else 0
+        iMax = int(arguments['--max']) if arguments['--max'] else len(fileNames)
         if iMax > len(fileNames):
             iMax = len(fileNames)
 
