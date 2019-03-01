@@ -28,6 +28,7 @@ def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None, DEBUG=False): # ite
         print(ans.keys())
 
     bulkInsertData = {"docs" : [] }
+
     for reqItem in ans['results']:
         key = reqItem["id"]
         dataToPut = iterable[key]
@@ -58,8 +59,12 @@ def bulkRequestByKey(keyIter, target):
     req = {
         "docs" : [ {"id" : k } for k in keyIter ]
     }
-    r = requests.post(DEFAULT_END_POINT + '/' + target +'/_bulk_get', json=req)
-    return json.loads(r.text)
+    url = DEFAULT_END_POINT + '/' + target +'/_bulk_get'
+    r = requests.post(url, json=req)
+    data = json.loads(r.text) 
+    if not 'results' in data:
+        raise TypeError("Unsuccessful bulkRequest at", url)
+    return data
 
 
 
