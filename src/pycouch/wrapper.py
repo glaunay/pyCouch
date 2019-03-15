@@ -1,9 +1,31 @@
 import requests
-import json
-
+import json, re
+import copy as cp
 
 DEFAULT_END_POINT='http://127.0.0.1:5984'
 
+QUEUE_MAPPER = None
+
+DEBUG_MODE = False
+
+def setKeyMappingRules(ruleLitt) :
+    global QUEUE_MAPPER
+    QUEUE_MAPPER = {}
+    for regExp in ruleLitt:
+        QUEUE_MAPPER[regExp] = {
+            "volName" : ruleLitt[regExp],
+            "queue" : {}
+        }
+
+
+def putInQueue(key, val):
+    global QUEUE_MAPPER
+
+    for regExp, cQueue in QUEUE_MAPPER.items():
+        if re.search(regExp, key):
+            cQueue["queue"][key] = val
+            return
+    raise ValueError("${key} not found")
 
 def setServerUrl(path):
     global DEFAULT_END_POINT
@@ -14,9 +36,33 @@ def lambdaFuse(old, new):
         old[k] = new[k]
     return old
 
+## MULTIPLE VOLUME BULK FN WRAPPER 
+def volDocAdd(iterable, updateFunc=lambdaFuse):
+    global QUEUE_MAPPER
+    if not QUEUE_MAPPER:
+        raise ValueError ("Please set volume mapping rules")
+    
+    if DEBUG_MODE:
+        print("Dispatching", len(iterable), "items")
+
+    data = []
+    for k,v in list(iterable.items()):
+        putInQueue(k,v)
+    for regExp, cQueue in QUEUE_MAPPER.items():
+        if not cQueue["queue"]:
+            continue
+        print("inserting ", regExp, str(len(cQueue["queue"])), "element(s) =>", cQueue["volName"])
+        if DEBUG_MODE:
+            print("DM",cQueue["queue"])
+        
+        data += bulkDocAdd(cQueue["queue"], updateFunc=updateFunc, target=cQueue["volName"])
+    
+    return data
+
+        
 ## BULK FUNCTIONS
 
-def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None, DEBUG=False): # iterable w/ key:value pairs, key is primary _id in DB and value is document to insert
+def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None): # iterable w/ key:value pairs, key is primary _id in DB and value is document to insert
     global DEFAULT_END_POINT
     
     if not target:
@@ -24,12 +70,13 @@ def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None, DEBUG=False): # ite
         
     ans = bulkRequestByKey(list(iterable.keys()), target)# param iterable msut have a keys method
 
-    if DEBUG:
-        print(ans.keys())
-
+    if DEBUG_MODE:
+        print("bulkDocAdd prior key request ", ans.keys())
+        print(ans)
+    
     bulkInsertData = {"docs" : [] }
 
-    for reqItem in ans['results']:
+    for reqItem in ans['results']:       
         key = reqItem["id"]
         dataToPut = iterable[key]
         dataToPut['_id'] = key
@@ -37,7 +84,7 @@ def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None, DEBUG=False): # ite
         _datum = reqItem['docs'][0] # mandatory docs key, one value array guaranted
         if 'error' in _datum:
             if docNotFound(_datum["error"]):
-                if DEBUG:
+                if DEBUG_MODE:
                     print("creating ", key, "document" )
             else:
                 print ('Unexpected error here', _datum)
@@ -49,13 +96,27 @@ def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None, DEBUG=False): # ite
             continue
         bulkInsertData["docs"].append(dataToPut)
         
-    if DEBUG:
+    if DEBUG_MODE:
         print("about to bulk_doc that", str(bulkInsertData))
         
     r = requests.post(DEFAULT_END_POINT + '/' + target + '/_bulk_docs', json=bulkInsertData)
     return json.loads(r.text)
-            
-def bulkRequestByKey(keyIter, target):
+
+def bulkRequestByKey(keyIter, target, packetSize=2000):          
+    data = {"results" : []}
+    if DEBUG_MODE:
+        print("bulkRequestByKey at", target)
+    for i in range(0,len(keyIter), packetSize):
+        j = i + packetSize if i + packetSize < len(keyIter) else len(keyIter)
+        keyBag = keyIter[i:j]
+        _data = _bulkRequestByKey(keyBag, target)
+       # data["results"].append(_data["results"])
+        data["results"] += _data["results"]
+    #if DEBUG_MODE:
+    #    print(data)
+    return data
+
+def _bulkRequestByKey(keyIter, target):
     req = {
         "docs" : [ {"id" : k } for k in keyIter ]
     }
@@ -118,7 +179,7 @@ def couchGetDoc(target, key):
     if not key:
         raise ValueError("Please specify a document key")
         
-    MaybeDoc = couchGetRequest(target + '/' + key)
+    MaybeDoc = couchGetRequest(str(target) + '/' + str(key))
     if docNotFound(MaybeDoc):
         return None
     return MaybeDoc
@@ -127,7 +188,7 @@ def couchPutDoc(target, key, data):
     MaybePut = couchPutRequest(target + '/' + key, data)
     return MaybePut
 
-def couchAddDoc(data, target=None, key=None, updateFunc=lambdaFuse, DEBUG=False):
+def couchAddDoc(data, target=None, key=None, updateFunc=lambdaFuse):
     if not target:
         raise ValueError("Please specify a database to target")
 
@@ -136,16 +197,16 @@ def couchAddDoc(data, target=None, key=None, updateFunc=lambdaFuse, DEBUG=False)
     
     dataToPut = data
     if not ans:
-        if DEBUG:
+        if DEBUG_MODE:
             print ("Creating " + target + "/" + key)       
             print(ans)
     else :
-        if DEBUG:
+        if DEBUG_MODE:
             print ("Updating " + target + "/" + key)
             print(ans)
         dataToPut = updateFunc(ans, data)
     
     ans = couchPutDoc(target, key, dataToPut)
 
-    if DEBUG:
+    if DEBUG_MODE:
         print(ans)
