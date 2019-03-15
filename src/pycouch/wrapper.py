@@ -27,6 +27,10 @@ def putInQueue(key, val):
             return
     raise ValueError("${key} not found")
 
+def resetQueue():
+    for regExp, cQueue in QUEUE_MAPPER.items():
+        cQueue["queue"] = {}
+
 def setServerUrl(path):
     global DEFAULT_END_POINT
     DEFAULT_END_POINT = path
@@ -57,6 +61,7 @@ def volDocAdd(iterable, updateFunc=lambdaFuse):
         
         data += bulkDocAdd(cQueue["queue"], updateFunc=updateFunc, target=cQueue["volName"])
     
+    resetQueue()
     return data
 
         
