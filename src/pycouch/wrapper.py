@@ -1,5 +1,5 @@
 import requests
-import json, re
+import json, re, time
 import copy as cp
 
 DEFAULT_END_POINT='http://127.0.0.1:5984'
@@ -58,8 +58,25 @@ def volDocAdd(iterable, updateFunc=lambdaFuse):
         print("inserting ", regExp, str(len(cQueue["queue"])), "element(s) =>", cQueue["volName"])
         if DEBUG_MODE:
             print("DM",cQueue["queue"])
+        joker = 0
+        _data = []
+        while True:
+            try:
+                _data = bulkDocAdd(cQueue["queue"], updateFunc=updateFunc, target=cQueue["volName"])
+            except Exception as e:
+                print("Something wrong append while bulkDocAdd, retrying time", str(joker))
+                print("Error LOG is ", str(e))
+                joker += 1
+                if joker > 50:
+                    print("50 tries failed, giving up")
+                    break
+                time.sleep(5)
+                continue
+            break
+        data += _data
+            #_data = bulkDocAdd(cQueue["queue"], updateFunc=updateFunc, target=cQueue["volName"])
         
-        data += bulkDocAdd(cQueue["queue"], updateFunc=updateFunc, target=cQueue["volName"])
+        #data += bulkDocAdd(cQueue["queue"], updateFunc=updateFunc, target=cQueue["volName"])
     
     resetQueue()
     return data
