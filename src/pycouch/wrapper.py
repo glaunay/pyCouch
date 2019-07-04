@@ -1,7 +1,7 @@
 import requests
-import json, re, time
+import json, re, time, random
 import copy as cp
-
+import pycouch.utility
 DEFAULT_END_POINT='http://127.0.0.1:5984'
 
 QUEUE_MAPPER = None
@@ -84,12 +84,13 @@ def volDocAdd(iterable, updateFunc=lambdaFuse):
         
 ## BULK FUNCTIONS
 
-def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None): # iterable w/ key:value pairs, key is primary _id in DB and value is document to insert
+def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None, depth=0): # iterable w/ key:value pairs, key is primary _id in DB and value is document to insert
     global DEFAULT_END_POINT
-    
+    if DEBUG_MODE:
+        print("bulkDocAdd iterable content", iterable)
+
     if not target:
         raise ValueError ("No target db specified")
-        
     ans = bulkRequestByKey(list(iterable.keys()), target)# param iterable msut have a keys method
 
     if DEBUG_MODE:
@@ -112,6 +113,8 @@ def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None): # iterable w/ key:
                 print ('Unexpected error here', _datum)
             
         elif 'ok' in _datum:
+            if "error" in _datum["ok"]:
+                raise Exception("Unexpected \"error\" key in bulkDocAdd answer packet::" + str( _datum["ok"]))
             dataToPut = updateFunc(_datum["ok"], iterable[key])
         else:
             print('unrecognized item packet format', str(reqItem))
@@ -119,10 +122,64 @@ def bulkDocAdd(iterable, updateFunc=lambdaFuse, target=None): # iterable w/ key:
         bulkInsertData["docs"].append(dataToPut)
         
     if DEBUG_MODE:
-        print("about to bulk_doc that", str(bulkInsertData))
-        
+        print("about to bulk_doc that", str(bulkInsertData)) 
+    #r = requests.post(DEFAULT_END_POINT + '/' + target + '/_bulk_docs', json=bulkInsertData)
+    #ans = json.loads(r.text)
+    insertError, insertOk = ([], [])
     r = requests.post(DEFAULT_END_POINT + '/' + target + '/_bulk_docs', json=bulkInsertData)
-    return json.loads(r.text)
+    ans = json.loads(r.text)       
+    insertOk, insertError = bulkDocErrorReport(ans)
+    # If unknown_error occurs in insertion, rev tag have to updated, this fn takes care of this business
+    # so we filter the input and make a recursive call 
+
+    if insertError:
+        depth += 1
+        if DEBUG_MODE:
+            print("Retry depth", depth)
+        if depth == 1:
+            print("Insert Error Recursive fix\n", insertError)
+
+        if depth == 50:
+            print("Giving up at 50th try for", insertError)
+        else:
+            idError = [ d['id'] for d in insertError ]
+            if DEBUG_MODE:
+                print("iterable to filter from", iterable)
+                print("depth", depth, ' insert Error content:', insertError)
+            _iterable = { k:v for k,v in iterable.items() if k in idError}
+            insertOk  += bulkDocAdd(_iterable, updateFunc=updateFunc, target=target, depth=depth)
+    elif depth > 0:
+        print("No more recursive insert left at depth", depth)
+    if DEBUG_MODE:
+        print("returning ", insertOk)
+    return insertOk
+
+def bulkDocErrorReport(data):
+    if DEBUG_MODE:
+        v = random.randint(0, 1)
+        x = random.randint(0, len(data) - 1)
+        if v == 0:
+            print("Generating error at postion", x)
+            print("prev is", data[x])
+            errPacket = {'id': data[x]['id'], 'error': 'unknown_error', 'reason': 'undefined', '_rev' : data[x]['rev']}
+            print(data[x], "-->", errPacket)
+            data[x] = errPacket
+    
+    ok = []
+    err = []
+    for insertStatus in data:
+        if 'ok' in insertStatus:
+            if insertStatus['ok']:
+                ok.append(insertStatus)
+            else:
+                print ("NEW ERROR", str(insertStatus))
+        else :
+            err.append(insertStatus)
+
+#if "error" in data:
+#        raise Exception("Unexpected \"error\" key in bulkDocAdd/update answer packet::" + str( data["ok"]))
+
+    return (ok, err)
 
 def bulkRequestByKey(keyIter, target, packetSize=2000):          
     data = {"results" : []}
@@ -163,7 +220,7 @@ def couchPing():
             print('Cant decode ping')
             return False
     except:
-        print("Cant connect to DB at: %s", DEFAULT_END_POINT)
+        print("Cant connect to DB at:", DEFAULT_END_POINT)
         return False
 
     print("Connection established\n", data)
